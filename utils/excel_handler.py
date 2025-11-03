@@ -68,7 +68,7 @@ class ExcelHandler:
 
             boolean_columns = [
                 'Extended Service', 'Mobile applications', 'Integrated oil mist control',
-                'High vibration', 'Rh 25 to 75', 'Rh >75%', 'Water contact conditions Low',
+                'High vibration', 'Rh 25 to 75%', 'Rh >75%', 'Water contact conditions Low',
                 'Water contact conditions Medium', 'Water contact conditions High',
                 'Contamination Index Particles Medium', 'Contamination Index Particles High'
             ]

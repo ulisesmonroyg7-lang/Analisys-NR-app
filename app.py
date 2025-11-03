@@ -1,4 +1,4 @@
-# app.py (Versión 16 - Final y Completa)
+# app.py (Versión Final con Sintaxis Simplificada)
 import streamlit as st
 import pandas as pd
 from pathlib import Path
@@ -28,8 +28,10 @@ st.set_page_config(
 class CirculatingSystemsDataProcessor:
     LPM_TO_GPM_FACTOR = 0.264172
 
-    def __init__(self, excel_handler, global_config, overrides):
+    # --- CONSTRUCTOR MODIFICADO (SIN TYPE HINTS) ---
+    def __init__(self, excel_handler, data_to_process, global_config, overrides):
         self.excel_handler = excel_handler
+        self.data_to_process = data_to_process
         self.global_config = global_config
         self.overrides = overrides
         self.rule_engine = RuleEngine(global_config)
@@ -58,7 +60,6 @@ class CirculatingSystemsDataProcessor:
 
     def analyze_flow_data_availability(self, data: pd.DataFrame) -> dict:
         analysis = {'total_records': len(data), 'with_cross_reference': 0, 'with_estimation': 0}
-        self.full_dataset = self.excel_handler.get_all_data()
         for idx, row in data.iterrows():
             siblings = self._find_pump_siblings(str(row.get('Machine', '')).strip(), idx)
             if siblings: analysis['with_cross_reference'] += 1
@@ -85,9 +86,16 @@ class CirculatingSystemsDataProcessor:
         cfm_required = (total_flow_gpm / 7.48) * 1.4
         return {'success': True, 'cfm_required': cfm_required, 'total_flow': total_flow_gpm, 'calculation_method': method}
 
+    def _parse_available_space(self, space_str: str) -> dict:
+        if pd.isna(space_str) or not str(space_str).strip(): return {'height_limit': None, 'diameter_limit': None}
+        s = str(space_str).lower()
+        mappings = {'less than 2 inches': {'h': 2.0, 'd': 2.0}, '2 to <4 inches': {'h': 4.0, 'd': 4.0}, '4 to <6 inches': {'h': 6.0, 'd': 6.0}, 'greater than 6 inches': {'h': None, 'd': None}, 'no port available': {'h': 0.0, 'd': 0.0}}
+        for key, limits in mappings.items():
+            if key in s: return {'height_limit': limits['h'], 'diameter_limit': limits['d']}
+        return {'height_limit': None, 'diameter_limit': None}
+
     def process_all_records(self):
-        self.full_dataset = self.excel_handler.get_all_data() if self.full_dataset is None or self.full_dataset.empty else self.full_dataset
-        for idx, row in self.excel_handler.data_report_df.iterrows():
+        for idx, row in self.data_to_process.iterrows():
             try:
                 final_config = self.global_config.copy()
                 if idx in self.overrides: final_config.update(self.overrides[idx])
@@ -97,51 +105,68 @@ class CirculatingSystemsDataProcessor:
         return self.results
 
     def process_single_record(self, row, row_index, breather_catalog, final_config):
-        result = {'success': False, 'rule_trace': [], 'flow_analysis': {}, 'selected_breather': [], 'result_status': 'Failed', 'error_message': '', 'gpm_analysis': {}}
+        result = {'success': False, 'rule_trace': [], 'flow_analysis': {}, 'selected_breather': [], 'result_status': 'Failed', 'error_message': ''}
         try:
             self.rule_engine.config = final_config
-            if not self.rule_engine.apply_rule_1(row, final_config)['breather_required']:
+            rule1_result = self.rule_engine.apply_rule_1(row, final_config)
+            result['rule_trace'].append(rule1_result['description'])
+            if not rule1_result['breather_required']:
                 return {**result, 'result_status': 'No Breather Required', 'success': True}
             flow_analysis = self.calculate_gpm_with_cross_reference(row, row_index, final_config)
             cfm_required, asset_gpm = flow_analysis['cfm_required'], flow_analysis['total_flow']
-            result.update({'flow_analysis': flow_analysis, 'rule_trace': [f"Rule 2: CFM = {cfm_required:.2f} (Source: {flow_analysis['calculation_method']})"]})
-            avg_humidity = pd.to_numeric(row.get('(D) Average Relative Humidity'), errors='coerce')
-            if (avg_humidity if pd.notna(avg_humidity) else 0) >= 75 or asset_gpm >= 25:
-                final_config['esi_manual'] = 'Extended service'; result['rule_trace'].append("(!) Adaptive Logic: High RH or GPM detected, forcing E.S.")
-            candidates = breather_catalog.copy() if breather_catalog is not None else pd.DataFrame()
-            if not candidates.empty:
-                gpm_col = 'Max Fluid Flow (gpm)'
-                if gpm_col in candidates.columns:
-                    candidates[gpm_col] = pd.to_numeric(candidates[gpm_col], errors='coerce')
-                    candidates = candidates[(candidates[gpm_col] >= asset_gpm) | (candidates[gpm_col].isna())]
-                    if candidates.empty: return {**result, 'error_message': f"No breathers found supporting {asset_gpm:.2f} GPM"}
-                candidates = self.rule_engine.apply_rule_3(candidates, cfm_required)
-                if candidates.empty: return {**result, 'error_message': f"No breathers found with CFM >= {cfm_required:.2f}"}
-                if not candidates.empty:
-                    result['selected_breather'] = [candidates.iloc[0].to_dict()]; result['result_status'] = 'Optimal'; result['success'] = True
+            result.update({'flow_analysis': flow_analysis})
+            candidates, trace3 = self.rule_engine.apply_rule_3_cfm(breather_catalog, cfm_required)
+            result['rule_trace'].append(trace3)
+            if candidates.empty: return {**result, 'error_message': "No breathers found matching CFM."}
+            initial_count_gpm = len(candidates)
+            candidates, trace_gpm = self.rule_engine.apply_rule_gpm_margin(candidates, asset_gpm)
+            result['rule_trace'].append(f"{trace_gpm} ({len(candidates)} of {initial_count_gpm} candidates remain).")
+            if candidates.empty: return {**result, 'error_message': "No breathers found matching GPM Margin."}
+            oil_cap_liters = pd.to_numeric(row.get('(D) Oil Capacity'), errors='coerce')
+            v_oil_gallons = (oil_cap_liters * self.LPM_TO_GPM_FACTOR) if pd.notna(oil_cap_liters) else 0
+            volumes = {'v_oil': v_oil_gallons}
+            initial_count_sump = len(candidates)
+            candidates, trace5 = self.rule_engine.apply_rule_5_sump(candidates, volumes, 'circulating')
+            result['rule_trace'].append(f"{trace5} ({len(candidates)} of {initial_count_sump} candidates remain).")
+            if candidates.empty: return {**result, 'error_message': "No breathers meet Sump Volume requirements."}
+            candidates, op_trace = self.rule_engine.apply_operational_filters(candidates, row, final_config)
+            result['rule_trace'].extend(op_trace)
+            if candidates.empty: return {**result, 'error_message': "No breathers found matching all operational requirements."}
+            space_str = row.get('(D) Breather/Fill Port Clearance'); space_data_provided = pd.notna(space_str) and str(space_str).strip() != ''
+            available_space = self._parse_available_space(space_str)
+            rule6_result = self.rule_engine.apply_rule_6(candidates, available_space)
+            result['rule_trace'].append(f"{rule6_result['trace']} ({len(rule6_result['fitting_breathers'])} fitting, {len(rule6_result['non_fitting_breathers'])} non-fitting).")
+            rule7_result = self.rule_engine.apply_rule_7(rule6_result['fitting_breathers'], rule6_result['non_fitting_breathers'], available_space, space_data_provided, final_config, "", cfm_required, True, volumes['v_oil'], 'circulating')
+            result['rule_trace'].append(rule7_result['trace'])
+            result.update({'selected_breather': rule7_result['selected_breather'], 'result_status': rule7_result['status'], 'installation_notes': rule7_result['installation_notes'], 'success': True if rule7_result.get('selected_breather') else False})
         except Exception as e:
-            result['error_message'] = str(e)
+            result['error_message'] = str(e); logger.error(f"Critical error on asset {row_index}: {e}", exc_info=True)
         return result
 
     def _create_error_result(self, error_message: str) -> dict:
         return {'success': False, 'error_message': error_message, 'result_status': 'Error'}
 
-    def get_results_as_dataframe(self) -> pd.DataFrame:
+    def get_results_as_dataframe(self, export_config: dict = None) -> pd.DataFrame:
         if not self.results: return pd.DataFrame()
+        config = export_config if export_config is not None else self.global_config
+        include_trace = config.get('verbose_trace', False); include_calcs = config.get('include_calculations', False)
         results_list = []
         for idx, result in self.results.items():
-            row_data = {'original_index': idx}; flow = result.get('flow_analysis', {})
-            if result.get('selected_breather'):
+            row_data = {'original_index': idx}; flow = result.get('flow_analysis', {}); gpm_analysis = result.get('gpm_analysis', {})
+            if result.get('success') and result.get('selected_breather'):
                 breather = result['selected_breather'][0]
-                row_data.update({'Breather_Brand': breather.get('Brand'), 'Breather_Model': breather.get('Model'), 'CFM_Required': flow.get('cfm_required'), 'Result_Status': result.get('result_status')})
+                row_data.update({'Breather_Brand': breather.get('Brand'), 'Breather_Model': breather.get('Model'), 'CFM_Required': flow.get('cfm_required'), 'CFM_Capacity': breather.get('Max Air Flow (cfm)'), 'Flow_Rate_GPM': flow.get('total_flow'), 'GPM_Source': flow.get('calculation_method'), 'Breather_Max_GPM': gpm_analysis.get('breather_max_gpm'), 'GPM_Margin': gpm_analysis.get('gpm_margin'), 'GPM_Margin_Warning': gpm_analysis.get('gpm_margin_warning', ''), 'Result_Status': result.get('result_status'), 'Installation_Notes': result.get('installation_notes')})
             else:
-                row_data.update({'Result_Status': result.get('result_status', 'Error'), 'Installation_Notes': result.get('error_message')})
+                row_data.update({'Result_Status': result.get('result_status', 'Error'), 'Installation_Notes': result.get('error_message') or 'Processing failed'})
+            if include_trace: row_data['Verbose_Trace'] = "\n".join(result.get('rule_trace', []))
+            if include_calcs: row_data['Calc_GPM_to_CFM'] = f"({flow.get('total_flow', 0):.2f} GPM / 7.48) * 1.4 = {flow.get('cfm_required', 0):.2f} CFM"
             results_list.append(row_data)
         return pd.DataFrame(results_list)
 
-# --- INICIALIZACIÓN, RENDERIZADO DE PESTAÑAS Y FUNCIONES AUXILIARES ---
+# --- INICIALIZACIÓN Y FUNCIONES GLOBALES ---
 
 def initialize_state():
+    # (Sin cambios)
     if 'excel_handler' not in st.session_state:
         st.session_state.excel_handler = ExcelHandler()
         default_catalog = "data/breathers_catalog.xlsx"
@@ -155,6 +180,8 @@ def initialize_state():
         if f'{tab}_config' not in st.session_state:
             st.session_state[f'{tab}_config'] = {'criticality': 'A', 'brand_filter': 'All Brands', 'safety_factor': 1.4, 'min_amb_temp': 60.0, 'max_amb_temp': 80.0, 'mobile_application': False, 'verbose_trace': False, 'include_calculations': False, 'manual_gpm_override': 0.0}
     if 'global_gemini_api_key' not in st.session_state: st.session_state.global_gemini_api_key = ""
+
+# --- PESTAÑAS DE LA INTERFAZ ---
 
 def render_splash_tab():
     st.header("Breather Analysis for Splash / Oil Bath Systems")
@@ -193,11 +220,11 @@ def render_circulating_tab():
     config = st.session_state.circulating_config
     if st.button("🚀 Process Analysis (Circulation)", type="primary"):
         with st.spinner("Running circulation analysis..."):
-            processor = CirculatingSystemsDataProcessor(st.session_state.excel_handler, config, st.session_state.circulating_overrides)
-            processor.full_dataset = st.session_state.excel_handler.get_all_data()
+            full_dataset = st.session_state.excel_handler.get_all_data()
+            processor = CirculatingSystemsDataProcessor(st.session_state.excel_handler, circulating_data, config, st.session_state.circulating_overrides)
+            processor.full_dataset = full_dataset
             flow_summary = processor.analyze_flow_data_availability(circulating_data)
             st.info(f"""**Flow Rate Data Summary:**\n- **{flow_summary['with_cross_reference']}** records with potential cross-reference from pump siblings.\n- **{flow_summary['with_estimation']}** records requiring flow rate estimation.""")
-            st.session_state.excel_handler.data_report_df = circulating_data.copy()
             st.session_state.circulating_results = processor.process_all_records()
             results_list = [{'original_index': idx, 'Status': res.get('result_status'), 'Recommended_Model': res.get('selected_breather', [{}])[0].get('Model') if res.get('selected_breather') else '-', 'CFM_Required': res.get('flow_analysis', {}).get('cfm_required'), 'Flow_Rate_GPM': res.get('flow_analysis', {}).get('total_flow'), 'GPM_Source': res.get('flow_analysis', {}).get('calculation_method'), 'GPM_Margin': res.get('gpm_analysis', {}).get('gpm_margin'), 'GPM_Warning': '⚠️' if res.get('gpm_analysis', {}).get('gpm_margin_warning') else ''} for idx, res in st.session_state.circulating_results.items()]
             analytical_df = pd.DataFrame(results_list).set_index('original_index')
@@ -207,15 +234,22 @@ def render_circulating_tab():
         df_display = st.session_state.circulating_analytical_df
         st.subheader("Analysis Results (Circulation)")
         st.dataframe(df_display, use_container_width=True)
+        st.subheader("🔍 Analysis Trace Inspector")
+        selected_asset_id_trace = st.selectbox("Select an asset to view its detailed selection logic:", options=df_display.index.tolist(), key='circ_trace_selector', index=None, placeholder="Choose an Asset ID...")
+        if selected_asset_id_trace:
+            asset_result = st.session_state.circulating_results.get(selected_asset_id_trace)
+            if asset_result:
+                with st.expander(f"Trace for Asset ID {selected_asset_id_trace}", expanded=True):
+                    for step in asset_result.get('rule_trace', []): st.text(step)
+            else: st.warning("Could not retrieve trace for the selected asset.")
         render_asset_editor('circulating', df_display)
         st.subheader("Export")
         if st.session_state.circulating_results:
             st.info("The export will merge the analysis results with your original data report.")
-            processor_for_export = CirculatingSystemsDataProcessor(st.session_state.excel_handler, config, st.session_state.circulating_overrides)
+            processor_for_export = CirculatingSystemsDataProcessor(st.session_state.excel_handler, circulating_data, config, st.session_state.circulating_overrides)
             processor_for_export.full_dataset = st.session_state.excel_handler.get_all_data()
-            st.session_state.excel_handler.data_report_df = circulating_data.copy()
             processor_for_export.process_all_records()
-            results_df_for_export = processor_for_export.get_results_as_dataframe()
+            results_df_for_export = processor_for_export.get_results_as_dataframe(export_config=config)
             output_buffer = io.BytesIO()
             success, msg = st.session_state.excel_handler.save_results_with_merge(results_df_for_export, output_buffer)
             if success: st.download_button("📥 Download Full Report (.xlsx)", output_buffer.getvalue(), "circulating_results_report.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", key='circ_export_btn')
@@ -282,8 +316,7 @@ def render_asset_editor(tab_key: str, analytical_df: pd.DataFrame):
 
 def render_ai_analysis_section(tab_key: str, analytical_df: pd.DataFrame):
     st.subheader("🔬 Artificial Intelligence Analysis")
-    if not st.session_state.global_gemini_api_key:
-        st.warning("Enter your Gemini API Key in the sidebar's AI Configuration to enable this feature."); return
+    if not st.session_state.global_gemini_api_key: st.warning("Enter your Gemini API Key in the sidebar's AI Configuration to enable this feature."); return
     col1, col2 = st.columns(2)
     with col1:
         selected_asset_id = st.selectbox("Select an asset for detailed analysis", analytical_df.index.tolist(), key=f'{tab_key}_asset_select', index=None, placeholder="Choose an ID")
@@ -296,10 +329,8 @@ def render_ai_analysis_section(tab_key: str, analytical_df: pd.DataFrame):
                         summary_data = {'total': len(analytical_df), 'status_counts': analytical_df['Status'].value_counts().to_dict(), 'top_models': analytical_df.get('Recommended_Model', pd.Series()).value_counts().to_dict()}
                         prompt = create_summary_prompt_for_batch(summary_data)
                         st.session_state[f'{tab_key}_summary_text'] = chat.send_message(prompt)
-                    else:
-                        st.error("Could not configure the AI model. Check your API Key.")
-                except Exception as e:
-                    st.error(f"An error occurred while generating the summary: {e}")
+                    else: st.error("Could not configure the AI model. Check your API Key.")
+                except Exception as e: st.error(f"An error occurred while generating the summary: {e}")
     if f'{tab_key}_summary_text' in st.session_state:
         with st.expander("Executive Summary", expanded=True): st.markdown(st.session_state[f'{tab_key}_summary_text'])
     if selected_asset_id:
@@ -316,12 +347,9 @@ def render_ai_analysis_section(tab_key: str, analytical_df: pd.DataFrame):
                     if chat.model:
                         prompt = create_dossier_prompt_for_success(asset_result) if asset_result.get('success') else create_failure_analysis_prompt(asset_result)
                         success, initial_message = chat.start_chat_and_get_greeting(prompt)
-                        if success:
-                            st.session_state[chat_session_key] = [{"role": "assistant", "content": initial_message}]; st.session_state[chat_instance_key] = chat
-                        else:
-                            st.session_state[chat_session_key] = [{"role": "assistant", "content": f"Error: {initial_message}"}]
-                    else:
-                        st.session_state[chat_session_key] = [{"role": "assistant", "content": "Error: Could not configure AI model."}]
+                        if success: st.session_state[chat_session_key] = [{"role": "assistant", "content": initial_message}]; st.session_state[chat_instance_key] = chat
+                        else: st.session_state[chat_session_key] = [{"role": "assistant", "content": f"Error: {initial_message}"}]
+                    else: st.session_state[chat_session_key] = [{"role": "assistant", "content": "Error: Could not configure AI model."}]
                 st.rerun()
             for message in st.session_state.get(chat_session_key, []):
                 with st.chat_message(message["role"]): st.markdown(message["content"])
@@ -331,8 +359,7 @@ def render_ai_analysis_section(tab_key: str, analytical_df: pd.DataFrame):
                 if chat_instance:
                     with st.spinner("Thinking..."):
                         response = chat_instance.send_message(prompt); st.session_state[chat_session_key].append({"role": "assistant", "content": response}); st.rerun()
-                else:
-                    st.warning("Please start the conversation first."); st.rerun()
+                else: st.warning("Please start the conversation first."); st.rerun()
 
 def get_analytical_dataframe(original_data, results, config, overrides) -> pd.DataFrame:
     if original_data.empty: return pd.DataFrame()
@@ -353,8 +380,7 @@ def get_analytical_dataframe(original_data, results, config, overrides) -> pd.Da
         df['CFM_Required'] = df.index.map(lambda idx: results.get(idx, {}).get('thermal_analysis', {}).get('cfm_required'))
         df['Status'] = df.index.map(lambda idx: results.get(idx, {}).get('result_status', 'Failed'))
         df['Recommended_Model'] = df.index.map(lambda idx: results.get(idx, {}).get('selected_breather', [{}])[0].get('Model', '-') if results.get(idx, {}).get('selected_breather') else '-')
-    else:
-        df['CFM_Required'], df['Status'], df['Recommended_Model'] = ['-'] * 3
+    else: df['CFM_Required'], df['Status'], df['Recommended_Model'] = ['-'] * 3
     cols_order = ['Overrides', 'Status', 'Recommended_Model', 'CFM_Required', 'Criticality', 'Mobile', 'CI', 'WCCI', 'ESI', 'Machine', 'Component']
     return df[[col for col in cols_order if col in df.columns]]
 
@@ -391,6 +417,7 @@ def main():
             config_c = st.session_state.circulating_config
             config_c['criticality'] = st.selectbox("Criticality", ["A", "B1", "B2", "C"], key='circ_crit_side')
             config_c['brand_filter'] = st.selectbox("Brand", ["All Brands", "Des-Case", "Air Sentry"], key='circ_brand_side')
+            config_c['verbose_trace'] = st.checkbox("Include verbose trace", key='circ_verbose_side')
             with st.popover("Advanced (Circulation)"):
                  config_c['manual_gpm_override'] = st.number_input("Manual GPM Override (0 to disable)", value=0.0, key='circ_gpm_side')
         with st.expander("⚙️ Configuration (Grease Analysis)", expanded=False):
