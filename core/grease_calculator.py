@@ -1,10 +1,5 @@
-"""
-Grease Calculation Module for NoRia Bearing Analysis - METODOLOGÍA NORIA COMPLETA (v2)
-- CORREGIDO: La lógica de conversión de unidades ahora lee la columna de unidad (DU)
-  en lugar de "adivinar" si un valor está en mm.
-- CORREGIDO: Nombres de columnas actualizados para coincidir con el Data Report.
-- Mantiene la implementación completa de la metodología de cantidad y frecuencia.
-"""
+# core/grease_calculator.py (FINAL VERSION - All strings translated to English)
+
 import pandas as pd
 import numpy as np
 import re
@@ -12,10 +7,11 @@ from typing import Dict, Any, Tuple
 
 class GreaseCalculator:
     """
-    Calcula la cantidad y frecuencia de engrase para rodamientos siguiendo la metodología Noria.
+    Calculates grease quantity and frequency for bearings following Noria methodology.
     """
     CONVERSION_OZ_TO_GRAMS = 28.3495
     CONVERSION_MM_TO_INCHES = 1 / 25.4
+    FILM_THICKNESS_INCHES_CONSTANT = 0.001
 
     FRAME_SIZE_TABLE_MANUAL = {
         "145-215": 0.28, "254-286": 0.55, "324-365": 0.82, "404-449": 1.35, "5000": 1.39,
@@ -33,23 +29,20 @@ class GreaseCalculator:
     }
 
     def _get_dimension_in_inches(self, row: pd.Series, value_col: str, unit_col: str) -> float:
-        """
-        Lee un valor y su unidad de columnas separadas y lo devuelve en pulgadas.
-        """
         value = pd.to_numeric(row.get(value_col), errors='coerce')
         unit = str(row.get(unit_col, 'in')).lower().strip()
+        if pd.isna(value): return np.nan
+        if 'mm' in unit: return value * self.CONVERSION_MM_TO_INCHES
+        return value
 
-        if pd.isna(value):
-            return np.nan
-        
-        if 'mm' in unit:
-            return value * self.CONVERSION_MM_TO_INCHES
-        
-        # Asume que son pulgadas si la unidad no es 'mm'
+    def _get_dimension_in_mm(self, row: pd.Series, value_col: str, unit_col: str) -> float:
+        value = pd.to_numeric(row.get(value_col), errors='coerce')
+        unit = str(row.get(unit_col, 'in')).lower().strip()
+        if pd.isna(value): return np.nan
+        if 'in' in unit: return value * 25.4
         return value
 
     def _parse_fraction(self, value: Any) -> float:
-        """Parsea un string que puede ser un número, una fracción o mixto."""
         if pd.isna(value): return np.nan
         try:
             return float(value)
@@ -72,52 +65,57 @@ class GreaseCalculator:
         return {**quantity_result, **frequency_result}
 
     def _calculate_quantity(self, row: pd.Series) -> Dict[str, Any]:
-        result = {'gq_grams': 0.0, 'quantity_method': 'Imposible de calcular', 'error': ''}
-        
+        result = {'gq_grams': 0.0, 'quantity_method': 'Calculation Impossible', 'error': ''}
         bearing_type = str(row.get('(D) Bearing Type', '')).lower()
-        if 'journal' in bearing_type or 'bushing' in str(row.get('MaintPointTemplate', '')).lower():
+        # La columna 9 (índice 8) es 'MaintPointTemplate'
+        maint_point_template = str(row.iloc[8]).lower()
+        
+        if 'journal' in bearing_type or 'bushing' in maint_point_template:
             return self._calculate_quantity_for_journal(row)
-
+        
         d_outer = self._get_dimension_in_inches(row, '(D) Bearing OD', '(DU) Bearing OD')
         b_width = self._get_dimension_in_inches(row, '(D) Bearing Width', '(DU) Bearing Width')
-        
-        if pd.notna(d_outer) and pd.notna(b_width) and d_outer > 0 and b_width > 0:
+        if pd.notna(d_outer) and d_outer > 0 and pd.notna(b_width) and b_width > 0:
             return self._calculate_quantity_from_dimensions(d_outer, b_width, row)
-
-        maint_point = str(row.get('MaintPointTemplate', '')).lower()
+        
         frame_size = str(row.get('(D) Frame', '')).strip()
-        if 'motor' in maint_point and frame_size:
+        if 'motor' in maint_point_template and frame_size:
             return self._calculate_quantity_from_frame_size(frame_size, row)
-            
-        result['error'] = "No se proporcionaron dimensiones de rodamiento ni Frame Size para motor."
+        
+        result['error'] = "Missing bearing dimensions or motor Frame Size."
         return result
 
     def _calculate_quantity_for_journal(self, row: pd.Series) -> Dict[str, Any]:
         d_inner = self._get_dimension_in_inches(row, '(D) Shaft Diameter', '(DU) Shaft Diameter')
         w_width = self._get_dimension_in_inches(row, '(D) Bearing Width', '(DU) Bearing Width')
-        dc_clearance = self._get_dimension_in_inches(row, '(D) Dinamic clearance', '(DU) Dinamic clearance')
+        missing_fields = []
+        if not (pd.notna(d_inner) and d_inner > 0): missing_fields.append('Shaft Diameter')
+        if not (pd.notna(w_width) and w_width > 0): missing_fields.append('Bearing Width')
+        if missing_fields:
+            error_msg = f"Missing data for Journal Bearing: {', '.join(missing_fields)}."
+            return {'gq_grams': 0.0, 'quantity_method': 'Calculation Impossible', 'error': error_msg}
 
-        if not all(pd.notna(x) and x > 0 for x in [d_inner, w_width, dc_clearance]):
-            return {'gq_grams': 0.0, 'quantity_method': 'Imposible de calcular', 'error': 'Faltan dimensiones para Journal Bearing'}
-        
+        film_thickness = self.FILM_THICKNESS_INCHES_CONSTANT
+        dc_clearance = 2 * film_thickness
         area = np.pi * d_inner * w_width
         gqj_oz = dc_clearance * area * 0.5
         gqj_grams = gqj_oz * self.CONVERSION_OZ_TO_GRAMS
-        return {'gq_grams': gqj_grams, 'quantity_method': 'Fórmula Journal Bearing', 'error': ''}
-            
+        
+        return {'gq_grams': gqj_grams, 'quantity_method': 'Journal Bearing Formula (Fixed FT)', 'error': ''}
+
     def _calculate_quantity_from_dimensions(self, d_outer: float, b_width: float, row: pd.Series) -> Dict[str, Any]:
         bn = str(row.get('(D) Bearing/Housing Number (DE - if more than 1)', '')).strip().upper()
         lub_system = str(row.get('(D) Single Point Lubricator', '')).strip()
-
+        
         if bn.endswith('W33'):
             gq_oz = 0.0456 * d_outer * b_width
-            method = "Fórmula (W33)"
+            method = "Formula (W33)"
         elif lub_system in ["Not equipped but needed", "Equipped and Needed"]:
             gq_oz = 0.0456 * d_outer * b_width
-            method = "Fórmula (Automático)"
+            method = "Formula (Automatic)"
         else:
             gq_oz = 0.114 * d_outer * b_width
-            method = "Fórmula (Manual)"
+            method = "Formula (Manual)"
             
         gq_grams = gq_oz * self.CONVERSION_OZ_TO_GRAMS
         return {'gq_grams': gq_grams, 'quantity_method': method, 'error': ''}
@@ -125,13 +123,15 @@ class GreaseCalculator:
     def _calculate_quantity_from_frame_size(self, frame_size: str, row: pd.Series) -> Dict[str, Any]:
         lub_system = str(row.get('(D) Single Point Lubricator', '')).strip()
         table = self.FRAME_SIZE_TABLE_AUTOMATED if lub_system in ["Not equipped but needed", "Equipped and Needed"] else self.FRAME_SIZE_TABLE_MANUAL
-        method = f"Tabla Frame Size ({'Automático' if table == self.FRAME_SIZE_TABLE_AUTOMATED else 'Manual'})"
+        
+        method = f"Frame Size Table ({'Automatic' if table == self.FRAME_SIZE_TABLE_AUTOMATED else 'Manual'})"
+        
         gq_oz = table.get(frame_size)
         if gq_oz is not None:
             gq_grams = gq_oz * self.CONVERSION_OZ_TO_GRAMS
             return {'gq_grams': gq_grams, 'quantity_method': method, 'error': ''}
         else:
-            return {'gq_grams': 0.0, 'quantity_method': 'Imposible de calcular', 'error': f"Frame Size '{frame_size}' no encontrado en tabla."}
+            return {'gq_grams': 0.0, 'quantity_method': 'Calculation Impossible', 'error': f"Frame Size '{frame_size}' not found in table."}
 
     def _calculate_frequency(self, row: pd.Series, quantity_result: Dict) -> Dict[str, Any]:
         freq_result = {'frequency_hours': 0.0, 'frequency_unit': 'N/A', 'K_factor': 0.0, 'factors': {}}
@@ -141,40 +141,47 @@ class GreaseCalculator:
         freq_result['K_factor'] = K
         
         bearing_type = str(row.get('(D) Bearing Type', '')).lower()
-        if 'journal' in bearing_type or 'bushing' in str(row.get('MaintPointTemplate', '')).lower():
+        if 'journal' in bearing_type or 'bushing' in str(row.iloc[8]).lower():
             d_inner = self._get_dimension_in_inches(row, '(D) Shaft Diameter', '(DU) Shaft Diameter')
             w_width = self._get_dimension_in_inches(row, '(D) Bearing Width', '(DU) Bearing Width')
-            dc_clearance = self._get_dimension_in_inches(row, '(D) Dinamic clearance', '(DU) Dinamic clearance')
+            film_thickness = self.FILM_THICKNESS_INCHES_CONSTANT
+            dc_clearance = 2 * film_thickness
             runtime_text = str(row.get('(D) Runtime (%)', '')).strip()
             rp_map = {"<10%": 0.1, "10 to 30%": 0.3, "30 to 60%": 0.6, "60 to 90%": 0.9, ">90%": 1.0}
             rp = rp_map.get(runtime_text, 0.9)
             Oh = 168 * rp
-            if not all(pd.notna(x) and x > 0 for x in [d_inner, w_width, dc_clearance, Oh, K]): return freq_result
+            if not all(pd.notna(x) and x > 0 for x in [d_inner, w_width, Oh, K]): 
+                return freq_result
             area = np.pi * d_inner * w_width
             t_grease_jb = (dc_clearance * area * Oh * 0.5) / K
+            MAX_FREQUENCY_HOURS = 8760
+            if t_grease_jb > MAX_FREQUENCY_HOURS:
+                t_grease_jb = MAX_FREQUENCY_HOURS
             freq_result['frequency_hours'], freq_result['frequency_unit'] = t_grease_jb, 'Oz/Week'
         else:
             n_rpm = pd.to_numeric(row.get('(D) RPM'), errors='coerce')
-            d_shaft = self._get_dimension_in_inches(row, '(D) Shaft Diameter', '(DU) Shaft Diameter')
-            
-            if pd.isna(d_shaft) or d_shaft == 0:
-                if quantity_result.get('quantity_method', '').startswith('Tabla Frame Size'):
+            d_shaft_mm = self._get_dimension_in_mm(row, '(D) Shaft Diameter', '(DU) Shaft Diameter')
+            if pd.isna(d_shaft_mm) or d_shaft_mm == 0:
+                if quantity_result.get('quantity_method', '').startswith('Frame Size Table'):
                     frame_size = str(row.get('(D) Frame', '')).strip()
                     shaft_diameter_str = self.SHAFT_DIAMETER_FROM_FS.get(frame_size)
-                    d_shaft = self._parse_fraction(shaft_diameter_str)
-
-            if not (pd.notna(n_rpm) and n_rpm > 0 and pd.notna(d_shaft) and d_shaft > 0): return freq_result
-            base_calc = (14000000 / (n_rpm * np.sqrt(d_shaft))) - (4 * d_shaft)
+                    d_shaft_in = self._parse_fraction(shaft_diameter_str)
+                    if pd.notna(d_shaft_in):
+                        d_shaft_mm = d_shaft_in * 25.4
+            if not (pd.notna(n_rpm) and n_rpm > 0 and pd.notna(d_shaft_mm) and d_shaft_mm > 0): return freq_result
+            sqrt_term = n_rpm * np.sqrt(d_shaft_mm)
+            if sqrt_term == 0: return freq_result
+            base_calc = (14000000 / sqrt_term) - (4 * d_shaft_mm)
             if base_calc <= 0: return freq_result
             t_grease_b = K * base_calc
+            MAX_FREQUENCY_HOURS = 8760
+            if t_grease_b > MAX_FREQUENCY_HOURS:
+                t_grease_b = MAX_FREQUENCY_HOURS
             freq_result['frequency_hours'], freq_result['frequency_unit'] = t_grease_b, 'Hours'
         return freq_result
     
     def _get_correction_factors(self, row: pd.Series) -> Dict[str, float]:
-        return {
-            'Ft': self._get_ft(row), 'Fc': self._get_fc(row), 'Fh': self._get_fh(row),
-            'Fv': self._get_fv(row), 'Fp': self._get_fp(row), 'Fd': self._get_fd(row)
-        }
+        return {'Ft': self._get_ft(row), 'Fc': self._get_fc(row), 'Fh': self._get_fh(row), 'Fv': self._get_fv(row), 'Fp': self._get_fp(row), 'Fd': self._get_fd(row)}
 
     def _get_ft(self, row: pd.Series) -> float:
         temp_str = str(row.get('(D) Operating Temperature', '')).strip()
@@ -187,22 +194,30 @@ class GreaseCalculator:
         return 0.1
 
     def _get_fc(self, row: pd.Series) -> float:
-        ci = str(row.get('(D) Contaminant Abrasive Index', '')).lower()
-        cl = str(row.get('(D) Contaminant Likelihood', '')).lower()
-        is_abrasive = 'abrasive' in ci
-        is_severe = 'severe' in cl or 'extreme' in cl
-        if is_abrasive and is_severe: return 0.1
-        if is_abrasive and not is_severe: return 0.4
-        if not is_abrasive and is_severe: return 0.7
+        ci_text = str(row.get('(D) Contaminant Abrasive Index', '')).lower()
+        cl_text = str(row.get('(D) Contaminant Likelihood', '')).lower()
+        ci_type = None
+        if 'earthen' in ci_text or 'paper' in ci_text: ci_type = 'earthen'
+        elif 'organic' in ci_text or 'food' in ci_text: ci_type = 'organic'
+        elif 'heavy' in ci_text or 'mining' in ci_text: ci_type = 'heavy'
+        elif 'metal' in ci_text or 'foundry' in ci_text: ci_type = 'metal'
+        is_severe = 'severe' in cl_text or 'extreme' in cl_text
+        if is_severe:
+            if ci_type in ['earthen', 'organic']: return 0.7
+            if ci_type in ['heavy', 'metal']: return 0.2
+        else:
+            if ci_type in ['earthen', 'organic']: return 1.0
+            if ci_type in ['heavy', 'metal']: return 0.4
         return 1.0
 
     def _get_fh(self, row: pd.Series) -> float:
-        arh_text = str(row.get('(D) Average Relative Humidity', '')).strip()
-        wcc_text = str(row.get('(D) Water Contact Conditions', '')).strip()
-        is_high_humidity = '>' in arh_text or (pd.to_numeric(arh_text.replace('%', ''), errors='coerce') or 0) >= 80
-        if any(term in wcc_text for term in ["Washdowns", "Severe Water", "Submerged"]): return 0.1
-        if any(term in wcc_text for term in ["Steam/Spray", "Mild", "Moderate"]): return 0.4
-        if is_high_humidity: return 0.7
+        arh_text = str(row.get('(D) Average Relative Humidity', '')).strip().replace('%', '')
+        wcc_text = str(row.get('(D) Water Contact Conditions', '')).lower()
+        if any(term in wcc_text for term in ["washdowns", "severe water", "submerged"]): return 0.1
+        if any(term in wcc_text for term in ["steam/spray", "mild water", "moderate water"]): return 0.4
+        try: humidity = float(re.findall(r'(\d+\.?\d*)', arh_text)[0])
+        except (IndexError, ValueError): humidity = 0
+        if humidity >= 75: return 0.7
         return 1.0
 
     def _get_fv(self, row: pd.Series) -> float:
@@ -220,5 +235,7 @@ class GreaseCalculator:
     def _get_fd(self, row: pd.Series) -> float:
         design_text = str(row.get('(D) Bearing Type', '')).lower()
         if 'ball' in design_text: return 10.0
-        if 'tapered' in design_text or 'spherical' in design_text: return 5.0
+        if 'cylindrical' in design_text or 'needle' in design_text: return 5.0
+        if 'tapered' in design_text or 'spherical' in design_text: return 1.0
+        if 'journal' in design_text: return 1.0
         return 1.0

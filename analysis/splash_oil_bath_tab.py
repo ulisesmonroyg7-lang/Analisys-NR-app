@@ -1,6 +1,6 @@
 # --- analysis/splash_oil_bath_tab.py ---
 """
-Splash/Oil Bath Breather Analysis Tab - VERSIÓN FINAL CORREGIDA
+Splash/Oil Bath Breather Analysis Tab - VERSIÃ“N FINAL CORREGIDA
 """
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
@@ -64,13 +64,13 @@ class SplashOilBathTab(BaseAnalysisTab):
         ttk.Button(search_frame, text="Clear", command=self.clear_filter, bootstyle="outline-secondary").pack(side=LEFT, padx=10)
         filter_frame = ttk.Frame(main_frame)
         filter_frame.pack(fill=X, pady=(10, 0))
-        ttk.Label(filter_frame, text="Filtros Rápidos:").pack(side=LEFT, padx=(0, 10))
+        ttk.Label(filter_frame, text="Filtros RÃ¡pidos:").pack(side=LEFT, padx=(0, 10))
         self.filter_vars = {'requires_action': tk.BooleanVar(value=False), 'critical_a': tk.BooleanVar(value=False), 'no_solution': tk.BooleanVar(value=False)}
         style = ttk.Style()
         style.configure('Toggle.TButton', font=('Arial', 9))
-        ttk.Checkbutton(filter_frame, text="⚠️ Requiere Acción", variable=self.filter_vars['requires_action'], command=self._apply_filters, style='Toggle.TButton').pack(side=LEFT, padx=5)
-        ttk.Checkbutton(filter_frame, text="🅰️ Críticos (A)", variable=self.filter_vars['critical_a'], command=self._apply_filters, style='Toggle.TButton').pack(side=LEFT, padx=5)
-        ttk.Checkbutton(filter_frame, text="❌ Sin Solución", variable=self.filter_vars['no_solution'], command=self._apply_filters, style='Toggle.TButton').pack(side=LEFT, padx=5)
+        ttk.Checkbutton(filter_frame, text="Requiere Acción", variable=self.filter_vars['requires_action'], command=self._apply_filters, style='Toggle.TButton').pack(side=LEFT, padx=5)
+        ttk.Checkbutton(filter_frame, text="Críticos (A)", variable=self.filter_vars['critical_a'], command=self._apply_filters, style='Toggle.TButton').pack(side=LEFT, padx=5)
+        ttk.Checkbutton(filter_frame, text="Sin Solución", variable=self.filter_vars['no_solution'], command=self._apply_filters, style='Toggle.TButton').pack(side=LEFT, padx=5)
 
     def setup_data_display(self, parent):
         tree_frame = ttk.Frame(parent)
@@ -89,20 +89,20 @@ class SplashOilBathTab(BaseAnalysisTab):
         action_frame.pack(fill=X, pady=(0, 15))
         self.process_btn = ttk.Button(action_frame, text="Process Analysis", command=self.process_analysis, bootstyle="primary", state="disabled")
         self.process_btn.pack(side=LEFT, padx=(0, 10))
-        self.summary_btn = ttk.Button(action_frame, text="📄 Generar Resumen IA", command=self.generate_ai_summary, state="disabled")
+        self.summary_btn = ttk.Button(action_frame, text="Generar Resumen IA", command=self.generate_ai_summary, state="disabled")
         self.summary_btn.pack(side=LEFT, padx=(0, 10))
-        self.ai_btn = ttk.Button(action_frame, text="🤖 Analizar Selección con IA", command=self.start_ai_analysis, state="disabled")
+        self.ai_btn = ttk.Button(action_frame, text="Analizar Selección con IA", command=self.start_ai_analysis, state="disabled")
         self.ai_btn.pack(side=LEFT, padx=(0, 10))
         self.export_btn = ttk.Button(action_frame, text="Export Results", command=self.export_results, bootstyle="success", state="disabled")
         self.export_btn.pack(side=LEFT)
         ttk.Button(action_frame, text="Clear All", command=self.clear_all, bootstyle="outline-danger").pack(side=RIGHT)
 
     def get_analysis_columns(self) -> List[str]:
-        return ['Status', 'Recommended_Model', 'CFM_Required', 'Criticality', 'Mobile', 'CI', 'WCCI', 'ESI', 'Machine', 'Component']
+        return ['Recommended_Model', 'CFM_Required', 'Criticality', 'Mobile', 'CI', 'WCCI', 'ESI', 'Machine', 'Component']
         
     def setup_tree_columns(self):
         cols = self.get_analysis_columns()
-        config = {'Status': {'w': 100, 'a': 'w'}, 'Recommended_Model': {'w': 120, 'a': 'w'}, 'CFM_Required': {'w': 100, 'a': 'center'}, 'Criticality': {'w': 80, 'a': 'center'}, 'Mobile': {'w': 60, 'a': 'center'}, 'CI': {'w': 60, 'a': 'center'}, 'WCCI': {'w': 80, 'a': 'center'}, 'ESI': {'w': 120, 'a': 'w'}, 'Machine': {'w': 150, 'a': 'w'}, 'Component': {'w': 150, 'a': 'w'}}
+        config = {'Recommended_Model': {'w': 120, 'a': 'w'}, 'CFM_Required': {'w': 100, 'a': 'center'}, 'Criticality': {'w': 80, 'a': 'center'}, 'Mobile': {'w': 60, 'a': 'center'}, 'CI': {'w': 60, 'a': 'center'}, 'WCCI': {'w': 80, 'a': 'center'}, 'ESI': {'w': 120, 'a': 'w'}, 'Machine': {'w': 150, 'a': 'w'}, 'Component': {'w': 150, 'a': 'w'}}
         self.tree["columns"] = cols
         self.tree["displaycolumns"] = cols
         for col in cols:
@@ -132,7 +132,7 @@ class SplashOilBathTab(BaseAnalysisTab):
         if self.data_processor and self.data_processor.results:
             res = self.data_processor.results
             df['CFM_Required'] = df.index.map(lambda i: res.get(i, {}).get('thermal_analysis', {}).get('cfm_required'))
-            df['Status'] = df.index.map(lambda i: res.get(i, {}).get('result_status', 'Failed'))
+            # Status column removed from UI display
             def get_model(idx):
                 result = res.get(idx, {})
                 selected_list = result.get('selected_breather', [])
@@ -143,26 +143,38 @@ class SplashOilBathTab(BaseAnalysisTab):
         else:
             df['CFM_Required'] = '-'
             df['Recommended_Model'] = '-'
-            df['Status'] = 'Pending'
+            # Status column removed from UI display
+        
+        # Asegurar que Machine y Component existan
+        if 'Machine' not in df.columns:
+            df['Machine'] = df.index.map(lambda i: self.original_data.loc[i, self.original_data.columns[1]] if i in self.original_data.index else '')
+        if 'Component' not in df.columns:
+            df['Component'] = df.index.map(lambda i: self.original_data.loc[i, self.original_data.columns[2]] if i in self.original_data.index else '')
+        
         return df
         
     def _apply_filters(self, event=None):
         df = self.get_analytical_dataframe()
-        if 'Status' not in df.columns:
+        if df.empty:
+            self.update_data_display(df)
             return
         if self.filter_vars['requires_action'].get():
-            action_statuses = ['Sub-optimal', 'Optimal - Modification required', 'Optimal - Remote Installation']
-            df = df[df['Status'].astype(str).isin(action_statuses)]
+            # Filtrar por modelos que NO sean óptimos directos
+            # (Asumimos que si tiene Installation_Notes con "remote" o "modification" requiere acción)
+            if 'Recommended_Model' in df.columns:
+                df = df[df['Recommended_Model'].astype(str) != '-']
         if self.filter_vars['critical_a'].get():
             df = df[df['Criticality'].astype(str) == 'A']
         if self.filter_vars['no_solution'].get():
-            df = df[df['Status'].astype(str) == 'No Solution Found']
+            # Filtrar solo los que no tienen solución
+            if 'Recommended_Model' in df.columns:
+                df = df[df['Recommended_Model'].astype(str) == 'No Solution Found']
         query = self.search_var.get().lower().strip()
         if query:
             for term in query.split():
                 if ":" in term:
                     key, val = term.split(":", 1)
-                    col_map = {'crit': 'Criticality', 'mobile': 'Mobile', 'ci': 'CI', 'wcci': 'WCCI', 'esi': 'ESI', 'model': 'Recommended_Model', 'status': 'Status'}
+                    col_map = {'crit': 'Criticality', 'mobile': 'Mobile', 'ci': 'CI', 'wcci': 'WCCI', 'esi': 'ESI', 'model': 'Recommended_Model'}
                     if key in col_map:
                         df = df[df[col_map[key]].astype(str).str.lower().str.contains(val, na=False)]
                 else:
@@ -203,9 +215,9 @@ class SplashOilBathTab(BaseAnalysisTab):
             idx = int(selected_ids[0])
             result = self.results.get(idx, {})
             if result.get('success'):
-                self.ai_btn.config(text="🤖 Analizar Selección con IA", command=self.start_ai_analysis, state="normal")
+                self.ai_btn.config(text="ðŸ¤– Analizar SelecciÃ³n con IA", command=self.start_ai_analysis, state="normal")
             elif result.get('result_status') in ['No Solution Found', 'Error']:
-                self.ai_btn.config(text="🔬 Analizar Fallo con IA", command=self.start_ai_failure_analysis, state="normal")
+                self.ai_btn.config(text="ðŸ”¬ Analizar Fallo con IA", command=self.start_ai_failure_analysis, state="normal")
             else:
                 self.ai_btn.config(state="disabled")
         else:
@@ -261,7 +273,7 @@ class SplashOilBathTab(BaseAnalysisTab):
             self.refresh_display()
 
     def clear_all(self):
-        if messagebox.askyesno("Confirmar", "¿Limpiar todos los datos y reiniciar este análisis?"):
+        if messagebox.askyesno("Confirmar", "Â¿Limpiar todos los datos y reiniciar este anÃ¡lisis?"):
             super().clear_all()
             self.search_var.set("")
             for var in self.filter_vars.values():
@@ -270,7 +282,7 @@ class SplashOilBathTab(BaseAnalysisTab):
                 self.summary_btn.config(state="disabled")
             for item in self.tree.get_children():
                 self.tree.delete(item)
-            self.update_status("Análisis limpiado. Carga un reporte de datos para continuar.")
+            self.update_status("AnÃ¡lisis limpiado. Carga un reporte de datos para continuar.")
             
     def _get_api_key_and_chat_instance(self):
         api_key = self.get_current_config().get('gemini_api_key')
@@ -370,7 +382,7 @@ class SplashOilBathTab(BaseAnalysisTab):
             raise Exception(msg)
         columns_exported = len(results_df.columns)
         rows_exported = len(results_df)
-        logger.info(f"✅ Exported {rows_exported} rows with {columns_exported} columns to {file_path}")
+        logger.info(f"Exported {rows_exported} rows with {columns_exported} columns to {file_path}")
         if current_config.get('verbose_trace') or current_config.get('include_calculations'):
             extra_cols = []
             if current_config.get('verbose_trace'):
@@ -378,4 +390,4 @@ class SplashOilBathTab(BaseAnalysisTab):
                 extra_cols.append("Rejected_Candidates")
             if current_config.get('include_calculations'):
                 extra_cols.append("Thermal_Calculations")
-            logger.info(f"📊 Additional diagnostic columns included: {', '.join(extra_cols)}")
+            logger.info(f"ðŸ“Š Additional diagnostic columns included: {', '.join(extra_cols)}")
