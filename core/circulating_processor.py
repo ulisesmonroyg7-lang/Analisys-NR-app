@@ -1,4 +1,4 @@
-# core/circulating_processor.py (FINAL and COMPLETE version with full rule engine flow)
+# core/circulating_processor.py (FINAL and COMPLETE version with LCC/Cost-Benefit logic)
 
 import pandas as pd
 from typing import Dict, List, Optional
@@ -129,15 +129,21 @@ class CirculatingSystemsDataProcessor:
             result['rule_trace'].append(rule5_result['trace'])
             if candidates.empty: return {**result, 'error_message': 'No breathers meet sump volume requirements.'}
 
-            selected = self.rule_engine._rank_and_select_best_breather(candidates, {'cfm_required': cfm_required, 'v_oil': v_oil, 'system_type': 'circulating'})
+            context = {'cfm_required': cfm_required, 'v_oil': v_oil, 'system_type': 'circulating'}
+            selected = self.rule_engine._rank_and_select_best_breather(candidates, context)
+            
             if selected:
                 result['selected_breather'] = [selected]
+                # --- CORRECCIÓN: Añadir las llamadas a LCC y Cost-Benefit ---
+                result['lcc_breather'] = self.rule_engine.select_lcc_breather(candidates, context)
+                result['cost_benefit_breather'] = self.rule_engine.select_cost_benefit_breather(candidates, context)
+
                 breather_gpm = selected.get(gpm_col)
                 if pd.notna(breather_gpm) and asset_gpm > 0:
                     result['gpm_analysis'] = {'gpm_margin': breather_gpm / asset_gpm, 'breather_max_gpm': breather_gpm}
                 result['success'] = True
                 result['result_status'] = 'Optimal'
-                result['installation_notes'] = 'Direct installation recommended.'
+                result['installation_notes'] = 'Direct installation recommended. Verify space constraints.'
             else:
                 result['error_message'] = 'No suitable breather found after all rules.'
 
@@ -156,21 +162,35 @@ class CirculatingSystemsDataProcessor:
             diameter = f"{float(breather_dict.get('Diameter (in)', 0)):.2f}"
         except (ValueError, TypeError):
             cfm, adsorption_oz, height, diameter = "N/A", 0.0, "N/A", "N/A"
-        return f"CFM: {cfm} | Adsorption: {adsorption_oz:.2f} Fl. oz | Dim: {height}\"H x {diameter}\"D"
+        media = breather_dict.get('Filter media', 'N/A')
+        vibration = "Yes" if breather_dict.get('High vibration', False) else "No"
+        mobile = "Yes" if breather_dict.get('Mobile applications', False) else "No"
+        valve = "Yes" if str(breather_dict.get('Check Valve', 'No')).strip().lower() == 'yes' else "No"
+        return (f"CFM: {cfm} | Adsorption Capacity: {adsorption_oz:.2f} Fl. oz | Dimensions: {height}\"H x {diameter}\"D | "
+                f"Filter Media: {media} | High Vibration: {vibration} | Mobile Application: {mobile} | Check Valve: {valve}")
 
     def get_results_as_dataframe(self) -> pd.DataFrame:
         results_list = []
         include_trace = self.global_config.get('verbose_trace', False)
         include_calcs = self.global_config.get('include_calculations', False)
+        
         for idx, result in self.results.items():
             row_data = {'original_index': idx}
             flow = result.get('flow_analysis', {})
             gpm_analysis = result.get('gpm_analysis', {})
+            
             if result.get('success') and result.get('selected_breather'):
                 breather = result['selected_breather'][0]
+                lcc_breather = result.get('lcc_breather')
+                cost_benefit_breather = result.get('cost_benefit_breather')
+                
                 row_data.update({
                     'Breather_Brand': breather.get('Brand'), 'Breather_Model': breather.get('Model'),
                     'Default_Breather_Desc': self._build_breather_description(breather),
+                    'LCC_Model': lcc_breather.get('Model') if lcc_breather else 'N/A',
+                    'LCC_Breather_Desc': self._build_breather_description(lcc_breather),
+                    'Cost_Benefit_Model': cost_benefit_breather.get('Model') if cost_benefit_breather else 'N/A',
+                    'Cost_Benefit_Breather_Desc': self._build_breather_description(cost_benefit_breather),
                     'CFM_Required': flow.get('cfm_required'),
                     'Flow_Rate_GPM': flow.get('total_flow'),
                     'GPM_Source': flow.get('calculation_method'),
@@ -180,9 +200,12 @@ class CirculatingSystemsDataProcessor:
                 })
             else:
                 row_data['Installation_Notes'] = result.get('error_message', 'Processing failed')
+            
             if include_trace:
                 row_data['Verbose_Trace'] = " -> ".join(result.get('rule_trace', []))
             if include_calcs:
                 row_data['Calc_GPM_to_CFM'] = f"({flow.get('total_flow', 0):.2f} GPM / 7.48) * 1.4 = {flow.get('cfm_required', 0):.2f} CFM"
+            
             results_list.append(row_data)
+        
         return pd.DataFrame(results_list)

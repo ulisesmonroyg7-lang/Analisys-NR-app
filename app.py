@@ -35,6 +35,7 @@ def clear_all_state():
     for key in list(st.session_state.keys()):
         if key not in preserve_keys:
             del st.session_state[key]
+    
     st.session_state.data_loaded = False
     st.session_state.file_name = ""
     st.session_state.data_report_df = pd.DataFrame()
@@ -48,6 +49,7 @@ def clear_all_state():
     st.session_state.grease_results = None
     st.session_state.show_gpm_summary = False
     st.session_state.gpm_summary_data = {}
+    
     st.session_state.global_config = {'max_amb_temp': 80.0, 'min_amb_temp': 60.0, 'mobile_application': False, 'high_particle_removal': False, 'esi_manual': None, 'safety_factor': 1.4, 'verbose_trace': False, 'include_calculations': False, 'gemini_api_key': '', 'enable_manual_gpm': False, 'manual_gpm_override': 0.0}
     try:
         if st.session_state.excel_handler.load_breather_catalog("data/breathers_catalog.xlsx"):
@@ -77,12 +79,14 @@ with st.sidebar:
     new_file_uploaded = False
     if uploaded_report is not None and st.session_state.get('file_name', '') != uploaded_report.name:
         try:
-            success, _ = st.session_state.excel_handler.load_data_report(uploaded_report)
+            success, error_msg = st.session_state.excel_handler.load_data_report(uploaded_report)
             if success:
                 st.session_state.data_report_df = st.session_state.excel_handler.get_all_data()
                 st.session_state.data_loaded = True
                 st.session_state.file_name = uploaded_report.name
                 new_file_uploaded = True
+            else:
+                st.error(f"Load error: {error_msg}")
         except Exception as e: st.error(f"An unexpected error occurred: {e}")
     if uploaded_catalog is not None:
         try:
@@ -132,10 +136,10 @@ with st.sidebar:
 # --- 5. Centralized Data Filtering ---
 if st.session_state.data_loaded and (new_file_uploaded or st.session_state.splash_df.empty):
     if new_file_uploaded:
-        clear_all_state()
-        st.session_state.data_loaded = True
-        st.session_state.file_name = uploaded_report.name
-        st.session_state.data_report_df = st.session_state.excel_handler.get_all_data()
+        st.session_state.splash_results = None; st.session_state.splash_overrides = {}
+        st.session_state.circulating_results = None; st.session_state.circulating_overrides = {}
+        st.session_state.grease_results = None
+    
     all_data = st.session_state.data_report_df
     splash_types = ['Gearbox Housing (Oil)', 'Bearing (Oil)', 'Pump (Oil)', 'Electric Motor Bearing (Oil)', 'Blower (Oil)']
     mask_splash = all_data.iloc[:, 8].astype(str).str.strip().isin(splash_types)
@@ -315,6 +319,8 @@ with circulating_tab:
             if st.session_state.get('circulating_results'):
                 res = st.session_state.circulating_results
                 df['Result_Model'] = df.index.map(lambda i: res.get(i, {}).get('selected_breather', [{}])[0].get('Model', 'No Solution') if res.get(i, {}).get('selected_breather') else 'No Solution')
+                df['LCC_Model'] = df.index.map(lambda i: (res.get(i, {}).get('lcc_breather') or {}).get('Model', '-'))
+                df['Cost_Benefit_Model'] = df.index.map(lambda i: (res.get(i, {}).get('cost_benefit_breather') or {}).get('Model', '-'))
                 df['Flow_Rate_GPM'] = df.index.map(lambda i: f"{res.get(i, {}).get('flow_analysis', {}).get('total_flow', 0):.1f}")
                 df['GPM_Source'] = df.index.map(lambda i: res.get(i, {}).get('flow_analysis', {}).get('calculation_method', 'N/A'))
             return df
@@ -323,7 +329,7 @@ with circulating_tab:
         c_col_c = circ_display_df.columns[2] if len(circ_display_df.columns) > 2 else 'Component'
         columns_to_show_circ = [m_col_c, c_col_c, 'Config_Criticality', 'Operating_Temp']
         if st.session_state.get('circulating_results'):
-            columns_to_show_circ.extend(['Result_Model', 'Flow_Rate_GPM', 'GPM_Source'])
+            columns_to_show_circ.extend(['Result_Model', 'LCC_Model', 'Cost_Benefit_Model', 'Flow_Rate_GPM', 'GPM_Source'])
         else:
             columns_to_show_circ.append('GPM_Source_Override')
         st.dataframe(circ_display_df[columns_to_show_circ], use_container_width=True, hide_index=True)
@@ -354,6 +360,7 @@ with grease_tab:
                 st.session_state.grease_results = results
                 st.success("Grease analysis complete!")
                 st.rerun()
+        
         st.subheader("Analysis Table")
         def get_grease_display_df():
             df = st.session_state.grease_df.copy()
@@ -367,11 +374,17 @@ with grease_tab:
                 df['K_Factor'] = df.index.map(lambda i: f"{res.get(i, {}).get('K_factor', 0):.2f}")
             else:
                 df['Status'] = 'Pending'; df['Grease_g'] = '-'; df['Qty_Method'] = '-'; df['Frequency_h'] = '-'; df['Freq_Unit'] = '-'; df['K_Factor'] = '-'
-            machine_col = df.columns[1] if len(df.columns) > 1 else 'Machine'
-            component_col = df.columns[2] if len(df.columns) > 2 else 'Component'
-            df['Machine'] = df[machine_col]
-            df['Component'] = df[component_col]
+            
+            # Asignación segura de columnas por nombre
+            df['RecordID'] = df['RecordID'] if 'RecordID' in df.columns else 'N/A'
+            df['Machine'] = df['Machine'] if 'Machine' in df.columns else 'N/A'
+            df['Component'] = df['Component'] if 'Component' in df.columns else 'N/A'
             return df
+
         grease_display_df = get_grease_display_df()
-        cols_to_show = ['Machine', 'Component', 'Status', 'Grease_g', 'Qty_Method', 'Frequency_h', 'Freq_Unit', 'K_Factor']
-        st.dataframe(grease_display_df[cols_to_show], use_container_width=True, hide_index=True)
+        
+        cols_to_show = ['RecordID', 'Machine', 'Component', 'Status', 'Grease_g', 'Qty_Method', 'Frequency_h', 'Freq_Unit', 'K_Factor']
+        
+        existing_cols_to_show = [col for col in cols_to_show if col in grease_display_df.columns]
+        
+        st.dataframe(grease_display_df[existing_cols_to_show], use_container_width=True, hide_index=True)
