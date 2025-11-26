@@ -1,4 +1,4 @@
-# app.py (FINAL VERSION - All 3 Tabs, Consolidated Export, All Bugs Fixed, No Omissions)
+# app.py (FINAL & COMPLETE - All 3 Tabs, All Features, All Bug Fixes, No Omissions)
 import streamlit as st
 import pandas as pd
 from pathlib import Path
@@ -127,6 +127,10 @@ with st.sidebar:
                 row_data = {'original_index': index, **res}
                 grease_results_list.append(row_data)
             grease_results_df = pd.DataFrame(grease_results_list)
+            CONVERSION_OZ_TO_GRAMS = 28.3495
+            if 'gq_grams' in grease_results_df.columns:
+                grease_results_df['Grease_Quantity_oz'] = grease_results_df['gq_grams'] / CONVERSION_OZ_TO_GRAMS
+                grease_results_df.rename(columns={'gq_grams': 'Grease_Quantity_g'}, inplace=True)
             sheets_to_export['Grease_Results'] = st.session_state.excel_handler.merge_results_with_original(grease_results_df)
         excel_data = to_excel_multifile(sheets_to_export)
         st.download_button(label="💾 Download Full Analysis Report", data=excel_data, file_name=f"Full_Analysis_Report_{st.session_state.file_name}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True, type="primary")
@@ -231,8 +235,10 @@ def gpm_summary_dialog(summary):
 # --- 8. Splash/Oil Bath Tab Content ---
 with splash_tab:
     st.header("Splash/Oil Bath Breather Analysis")
-    if not st.session_state.data_loaded or not st.session_state.get('catalog_loaded'): st.warning("Please upload files to begin.")
-    elif st.session_state.splash_df.empty: st.info("No applicable records found.")
+    if not st.session_state.data_loaded or not st.session_state.get('catalog_loaded'):
+        st.warning("Please upload a Data Report and a Breather Catalog to begin.")
+    elif st.session_state.splash_df.empty:
+        st.info("No applicable records for Splash/Oil Bath analysis were found in the uploaded report.")
     else:
         st.subheader("Configuration & Actions")
         col1, col2, col3 = st.columns(3);
@@ -248,7 +254,7 @@ with splash_tab:
                 processor = DataProcessor(st.session_state.excel_handler, st.session_state.splash_df, current_config, st.session_state.splash_overrides)
                 st.session_state.splash_results = processor.process_all_records()
                 st.success("Analysis complete!")
-                st.rerun()
+            st.rerun()
         st.subheader("Analysis Table")
         def get_splash_display_df():
             df = st.session_state.splash_df.copy()
@@ -257,16 +263,16 @@ with splash_tab:
             df['Operating_Temp'] = df['(D) Operating Temperature']
             if st.session_state.get('splash_results'):
                 res = st.session_state.splash_results
-                df['Result_Model'] = df.index.map(lambda i: res.get(i, {}).get('selected_breather', [{}])[0].get('Model', 'No Solution') if res.get(i, {}).get('selected_breather') else 'No Solution')
-                df['Result_CFM_Req'] = df.index.map(lambda i: f"{res.get(i, {}).get('thermal_analysis', {}).get('cfm_required', 0):.2f}")
-                df['Result_Notes'] = df.index.map(lambda i: res.get(i, {}).get('installation_notes', ''))
+                df['Result_Model'] = df.index.map(lambda i: (res.get(i, {}).get('selected_breather') or [{}])[0].get('Model', 'No Solution'))
+                df['Result_CFM_Req'] = df.index.map(lambda i: f"{(res.get(i, {}).get('thermal_analysis') or {}).get('cfm_required', 0):.2f}")
+                df['Result_Notes'] = df.index.map(lambda i: (res.get(i, {}) or {}).get('installation_notes', ''))
             return df
         splash_display_df = get_splash_display_df()
-        m_col = splash_display_df.columns[1] if len(splash_display_df.columns) > 1 else 'Machine'
-        c_col = splash_display_df.columns[2] if len(splash_display_df.columns) > 2 else 'Component'
+        m_col = 'Machine' if 'Machine' in splash_display_df.columns else splash_display_df.columns[1]
+        c_col = 'Component' if 'Component' in splash_display_df.columns else splash_display_df.columns[2]
         cols_to_show = [m_col, c_col, 'Config_Criticality', 'Operating_Temp']
         if st.session_state.get('splash_results'): cols_to_show.extend(['Result_Model', 'Result_CFM_Req', 'Result_Notes'])
-        st.dataframe(splash_display_df[cols_to_show], use_container_width=True, hide_index=True)
+        st.dataframe(splash_display_df[[c for c in cols_to_show if c in splash_display_df.columns]], use_container_width=True, hide_index=True)
         st.markdown("---")
         st.subheader("Edit Asset Configurations")
         splash_asset_options = [f"{row[m_col]} - {row[c_col]} (ID: {index})" for index, row in splash_display_df.iterrows()]
@@ -318,21 +324,21 @@ with circulating_tab:
             df['Operating_Temp'] = df['(D) Operating Temperature']
             if st.session_state.get('circulating_results'):
                 res = st.session_state.circulating_results
-                df['Result_Model'] = df.index.map(lambda i: res.get(i, {}).get('selected_breather', [{}])[0].get('Model', 'No Solution') if res.get(i, {}).get('selected_breather') else 'No Solution')
+                df['Result_Model'] = df.index.map(lambda i: (res.get(i, {}).get('selected_breather') or [{}])[0].get('Model', 'No Solution'))
                 df['LCC_Model'] = df.index.map(lambda i: (res.get(i, {}).get('lcc_breather') or {}).get('Model', '-'))
                 df['Cost_Benefit_Model'] = df.index.map(lambda i: (res.get(i, {}).get('cost_benefit_breather') or {}).get('Model', '-'))
-                df['Flow_Rate_GPM'] = df.index.map(lambda i: f"{res.get(i, {}).get('flow_analysis', {}).get('total_flow', 0):.1f}")
-                df['GPM_Source'] = df.index.map(lambda i: res.get(i, {}).get('flow_analysis', {}).get('calculation_method', 'N/A'))
+                df['Flow_Rate_GPM'] = df.index.map(lambda i: f"{(res.get(i, {}).get('flow_analysis') or {}).get('total_flow', 0):.1f}")
+                df['GPM_Source'] = df.index.map(lambda i: (res.get(i, {}).get('flow_analysis') or {}).get('calculation_method', 'N/A'))
             return df
         circ_display_df = get_circ_display_df()
-        m_col_c = circ_display_df.columns[1] if len(circ_display_df.columns) > 1 else 'Machine'
-        c_col_c = circ_display_df.columns[2] if len(circ_display_df.columns) > 2 else 'Component'
+        m_col_c = 'Machine' if 'Machine' in circ_display_df.columns else circ_display_df.columns[1]
+        c_col_c = 'Component' if 'Component' in circ_display_df.columns else circ_display_df.columns[2]
         columns_to_show_circ = [m_col_c, c_col_c, 'Config_Criticality', 'Operating_Temp']
         if st.session_state.get('circulating_results'):
             columns_to_show_circ.extend(['Result_Model', 'LCC_Model', 'Cost_Benefit_Model', 'Flow_Rate_GPM', 'GPM_Source'])
         else:
             columns_to_show_circ.append('GPM_Source_Override')
-        st.dataframe(circ_display_df[columns_to_show_circ], use_container_width=True, hide_index=True)
+        st.dataframe(circ_display_df[[c for c in columns_to_show_circ if c in circ_display_df.columns]], use_container_width=True, hide_index=True)
         st.markdown("---")
         st.subheader("Edit Asset Configurations")
         circ_asset_options = [f"{row[m_col_c]} - {row[c_col_c]} (ID: {index})" for index, row in circ_display_df.iterrows()]
@@ -364,27 +370,24 @@ with grease_tab:
         st.subheader("Analysis Table")
         def get_grease_display_df():
             df = st.session_state.grease_df.copy()
+            CONVERSION_OZ_TO_GRAMS = 28.3495
             if st.session_state.get('grease_results'):
                 res = st.session_state.grease_results
                 df['Status'] = df.index.map(lambda i: "Success" if (res.get(i, {}).get('gq_grams', 0) > 0 or res.get(i, {}).get('frequency_hours', 0) > 0) else "Failed")
-                df['Grease_g'] = df.index.map(lambda i: f"{res.get(i, {}).get('gq_grams', 0):.2f}")
+                df['Grease_oz'] = df.index.map(lambda i: f"{(res.get(i, {}).get('gq_grams', 0) / CONVERSION_OZ_TO_GRAMS):.2f}")
                 df['Qty_Method'] = df.index.map(lambda i: res.get(i, {}).get('quantity_method', 'N/A'))
                 df['Frequency_h'] = df.index.map(lambda i: f"{res.get(i, {}).get('frequency_hours', 0):.1f}")
                 df['Freq_Unit'] = df.index.map(lambda i: res.get(i, {}).get('frequency_unit', 'N/A'))
                 df['K_Factor'] = df.index.map(lambda i: f"{res.get(i, {}).get('K_factor', 0):.2f}")
             else:
-                df['Status'] = 'Pending'; df['Grease_g'] = '-'; df['Qty_Method'] = '-'; df['Frequency_h'] = '-'; df['Freq_Unit'] = '-'; df['K_Factor'] = '-'
+                df['Status'] = 'Pending'; df['Grease_oz'] = '-'; df['Qty_Method'] = '-'; df['Frequency_h'] = '-'; df['Freq_Unit'] = '-'; df['K_Factor'] = '-'
             
-            # Asignación segura de columnas por nombre
-            df['RecordID'] = df['RecordID'] if 'RecordID' in df.columns else 'N/A'
+            df['RecordID'] = df['RecordID'] if 'RecordID' in df.columns else df.index
             df['Machine'] = df['Machine'] if 'Machine' in df.columns else 'N/A'
             df['Component'] = df['Component'] if 'Component' in df.columns else 'N/A'
             return df
 
         grease_display_df = get_grease_display_df()
-        
-        cols_to_show = ['RecordID', 'Machine', 'Component', 'Status', 'Grease_g', 'Qty_Method', 'Frequency_h', 'Freq_Unit', 'K_Factor']
-        
+        cols_to_show = ['RecordID', 'Machine', 'Component', 'Status', 'Grease_oz', 'Qty_Method', 'Frequency_h', 'Freq_Unit', 'K_Factor']
         existing_cols_to_show = [col for col in cols_to_show if col in grease_display_df.columns]
-        
         st.dataframe(grease_display_df[existing_cols_to_show], use_container_width=True, hide_index=True)
